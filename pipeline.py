@@ -116,7 +116,7 @@ MB_DELAY   = 1.1   # strict 1 req/sec rate limit
 
 def mb_get(path, params=None):
     params = {**(params or {}), "fmt": "json"}
-    r = requests.get(f"{MB_BASE}{path}", headers=MB_HEADERS, params=params)
+    r = requests.get(f"{MB_BASE}{path}", headers=MB_HEADERS, params=params, timeout=30)
     time.sleep(MB_DELAY)
     if r.status_code == 503:
         print("  MusicBrainz 503 — sleeping 15s"); time.sleep(15)
@@ -195,7 +195,7 @@ def dg_get(url, params=None):
             "User-Agent": "MusicIndustryDB/1.0 sibyjohn0@gmail.com",
             "Authorization": f"Discogs key={DISCOGS_KEY}, secret={DISCOGS_SECRET}",
         },
-        params=params or {})
+        params=params or {}, timeout=30)
     time.sleep(DG_DELAY)
     if r.status_code == 429:
         print("  Discogs 429 — sleeping 60s"); time.sleep(60)
@@ -279,7 +279,7 @@ def sp_token():
     r = requests.post("https://accounts.spotify.com/api/token",
         headers={"Authorization": f"Basic {creds}",
                  "Content-Type": "application/x-www-form-urlencoded"},
-        data={"grant_type": "client_credentials"})
+        data={"grant_type": "client_credentials"}, timeout=30)
     r.raise_for_status()
     _sp_token = r.json()["access_token"]
     return _sp_token
@@ -291,7 +291,7 @@ def sp_get(path, params=None):
     if not _sp_token:
         return None
     r = requests.get(f"{SP_BASE}{path}",
-        headers={"Authorization": f"Bearer {_sp_token}"}, params=params or {})
+        headers={"Authorization": f"Bearer {_sp_token}"}, params=params or {}, timeout=30)
     time.sleep(SP_DELAY)
     if r.status_code == 401:
         sp_token(); return sp_get(path, params)
@@ -474,10 +474,16 @@ def main():
     if not SPOTIFY_SECRET:
         print("WARNING: SPOTIFY_CLIENT_SECRET not set — Spotify will be skipped.")
 
+    def safe(fn, label):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"  [WARN] {label} failed, continuing with partial data: {e}")
+            return []
     all_rows = []
-    all_rows += load_agent_csvs()
-    all_rows += run_musicbrainz()
-    all_rows += run_discogs()
+    all_rows += safe(load_agent_csvs, "agent CSVs")
+    all_rows += safe(run_musicbrainz, "MusicBrainz")
+    all_rows += safe(run_discogs, "Discogs")
 
     # Merge and clean label/agency database
     clean = clean_and_merge(all_rows)
@@ -488,7 +494,7 @@ def main():
     print(f"\n[Output] {db_path}  ({len(clean)} rows)")
 
     # Spotify enrichment — separate reference file (no label data available)
-    sp_rows = run_spotify()
+    sp_rows = safe(run_spotify, "Spotify")
     if sp_rows:
         sp_path = OUT_DIR / "spotify_artists.csv"
         sp_fields = ["Artist Name", "Spotify ID", "Spotify URL", "Market"]
